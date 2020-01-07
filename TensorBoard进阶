@@ -1,0 +1,38 @@
+import tensorflow as tf
+from tensorflow.examples.tutorials.mnist import input_data
+mnist = input_data.read_data_sets("./mnist", one_hot=True)
+x = tf.placeholder(tf.float32,[None, 784])
+y_ = tf.placeholder(tf.float32,[None, 10])
+W = tf.Variable(tf.zeros([784, 10]))
+b = tf.Variable(tf.zeros([10]))
+with tf.name_scope('Model'):
+    y = tf.nn.softmax(tf.matmul(x,W)+b)
+with tf.name_scope('Loss'):
+    cross_entropy = tf.reduce_mean(-tf.reduce_sum(y_ * tf.log(y), reduction_indices=[1]))
+with tf.name_scope('SGD'):
+    train_step = tf.train.GradientDescentOptimizer(0.5).minimize(cross_entropy)
+with tf.name_scope('Accuracy'):
+    correct_prediction = tf.equal(tf.argmax(y,1),tf.argmax(y_,1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+tf.summary.scalar("loss", cross_entropy)
+                # Create a summary to monitor accu4
+tf.summary.scalar("accuracy", accuracy)# Merge all summaries into a single op
+merged_summary_op = tf.summary.merge_all()
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    logs_path = './test'
+    summary_writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
+    for epoch in range(25):
+        avg_cost = 0. 
+        batch_size = 100
+        total_batch = int(mnist.train.num_examples / batch_size)
+        for i in range(total_batch):
+            batch_xs, batch_ys = mnist.train.next_batch(batch_size)
+            _, loss , summary= sess.run([train_step, cross_entropy, merged_summary_op], feed_dict = {x: batch_xs, y_: batch_ys})
+            summary_writer.add_summary(summary, epoch * total_batch + i)
+            avg_cost += loss / total_batch
+        print("Epoch:", '%04d' % (epoch+1), "cost=", "{:.9f}".format(avg_cost))
+    print("Accuracy:", accuracy.eval({x: mnist.test.images, y_: mnist.test.labels}))
+    print("Run the command line:\n" \
+                                  "--> tensorboard --logdir=path " \
+                                  "\nThen open url into your web browser")
