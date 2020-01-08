@@ -1,0 +1,338 @@
+import argparse
+import math
+import sys
+import time
+import numpy as np
+import os
+import cv2
+import pdb
+from six.moves import xrange  # pylint: disable=redefined-builtin
+import tensorflow as tf
+import pandas as pd
+from sklearn.model_selection import train_test_split
+FLAGS = None
+scpoe = "relu"
+classes = 4
+def print_activations(t):
+  print(t.op.name, ' ', t.get_shape().as_list())
+
+
+def inference(weights,biases_add):
+    """
+    Build the AlexNet model.
+    Args:
+    images: Images Tensor
+    Returns:
+    pool5: the last Tensor in the convolutional component of AlexNet.
+    parameters: a list of Tensors corresponding to the weights and biases of the
+    AlexNet model.
+    """
+    #pdb.set_trace()
+    images = tf.placeholder("float",shape=[None,224,224,3],name='x')
+    
+    parameters = []
+    with tf.name_scope('conv1') as scope:
+        kernel = weights['wc1']
+        conv = tf.nn.conv2d(images, kernel, [1, 4, 4, 1], padding='SAME')
+        biases = biases_add['wc1']
+        bias = tf.nn.bias_add(conv, biases)
+        conv1 = tf.nn.relu(bias)
+        print_activations(conv1)
+        parameters += [kernel, biases]
+
+    # lrn1
+    with tf.name_scope('lrn1') as scope:
+        lrn1 = tf.nn.local_response_normalization(conv1,
+                                              alpha=1e-4,
+                                              beta=0.75,
+                                              depth_radius=2,
+                                              bias=2.0)
+
+    # pool1
+        pool1 = tf.nn.max_pool(lrn1,
+                         ksize=[1, 3, 3, 1],
+                         strides=[1, 2, 2, 1],
+                         padding='VALID',
+                         name='pool1')
+        print_activations(pool1)
+    #pdb.set_trace()
+    # conv2
+    with tf.name_scope('conv2') as scope:
+        kernel = weights['wc2']
+        conv = tf.nn.conv2d(pool1, kernel, [1, 1, 1, 1], padding='SAME')
+        biases = biases_add['wc2']
+        bias = tf.nn.bias_add(conv, biases)
+        conv2 = tf.nn.relu(bias)
+        parameters += [kernel, biases]
+        print_activations(conv2)
+
+    # lrn2
+    with tf.name_scope('lrn2') as scope:
+        lrn2 = tf.nn.local_response_normalization(conv2,
+                                              alpha=1e-4,
+                                              beta=0.75,
+                                              depth_radius=2,
+                                              bias=2.0)
+
+        # pool2
+        pool2 = tf.nn.max_pool(lrn2,
+                         ksize=[1, 3, 3, 1],
+                         strides=[1, 2, 2, 1],
+                         padding='VALID',
+                         name='pool2')
+        print_activations(pool2)
+
+    # conv3
+    with tf.name_scope('conv3') as scope:
+        kernel = weights['wc3']
+        conv = tf.nn.conv2d(pool2, kernel, [1, 1, 1, 1], padding='SAME')
+        biases =biases_add['wc3'] 
+        bias = tf.nn.bias_add(conv, biases)
+        conv3 = tf.nn.relu(bias)
+        parameters += [kernel, biases]
+        print_activations(conv3)
+
+    # conv4
+    with tf.name_scope('conv4') as scope:
+        kernel = weights['wc4']
+        conv = tf.nn.conv2d(conv3, kernel, [1, 1, 1, 1], padding='SAME')
+        biases = biases_add['wc4']
+        bias = tf.nn.bias_add(conv, biases)
+        conv4 = tf.nn.relu(bias)
+        parameters += [kernel, biases]
+        print_activations(conv4)
+
+    # conv5
+    with tf.name_scope('conv5') as scope:
+        kernel = weights['wc5']
+        conv = tf.nn.conv2d(conv4, kernel, [1, 1, 1, 1], padding='SAME')
+        biases = biases_add['wc5']
+        bias = tf.nn.bias_add(conv, biases)
+        conv5 = tf.nn.relu(bias)
+        parameters += [kernel, biases]
+        print_activations(conv5)
+        pool5 = tf.nn.max_pool(conv5,ksize=[1,3,3,1],strides=[1,2,2,1],padding = 'VALID')
+
+    #pdb.set_trace()
+
+    with tf.name_scope('fc6') as scope:
+        kernel = weights['fc6']
+        conv = tf.nn.conv2d(pool5, kernel, [1, 1, 1, 1], padding='VALID')
+        biases = biases_add['fc6']
+        bias = tf.nn.bias_add(conv, biases)
+        fc6 = tf.nn.tanh(bias)
+        parameters += [kernel, biases]
+        print_activations(fc6)
+
+        fc6 = tf.nn.dropout(fc6,0.5)
+    
+    with tf.name_scope('fc7') as scope:
+        kernel = weights['fc7']
+        conv = tf.nn.conv2d(fc6, kernel, [1, 1, 1, 1], padding='VALID')
+        biases = biases_add['fc7']
+        bias = tf.nn.bias_add(conv, biases)
+        fc7 = tf.nn.tanh(bias)
+        parameters += [kernel, biases]
+        print_activations(fc7)
+
+        fc8 = tf.nn.dropout(fc7,0.5)
+    
+    with tf.name_scope('fc8') as scope:
+        kernel = weights['fc8']
+        conv = tf.nn.conv2d(fc7, kernel, [1, 1, 1, 1], padding='VALID')
+        biases = biases_add['fc8']
+        bias = tf.nn.bias_add(conv, biases)
+        fc8 = tf.nn.softmax(bias)
+        #fc8 = bias
+        parameters += [kernel, biases]
+        print_activations(fc8)
+        y_pred_cls = fc8[:,0,0,:]
+    print(y_pred_cls[0,:])
+    return images,y_pred_cls
+
+def img_resize(filename):
+    image_batch = []
+    for j in range(len(filename)):
+        a=filename[j]
+        img = cv2.imread(filename[j])
+        row_num,column_num = img.shape[0:2]
+        num = row_num
+        if row_num < column_num:
+            num = column_num
+        img2 = np.zeros([num,num,3])
+        img2[0:row_num,0:column_num,:] = img
+        img3 = cv2.resize(img2,(224, 224), interpolation=cv2.INTER_CUBIC)
+        image_batch.append(img3)
+        
+    image_batch = np.array(image_batch)
+    
+    return image_batch
+    
+img_path=[]
+
+def loadpath(input_dir):
+    for (path, dirnames, filenames) in os.walk(input_dir):
+        for dirname in dirnames:
+            img_path.append(path+'/'+dirname)
+        return img_path
+
+def images_get(train_data_dir):
+    path= loadpath(train_data_dir)
+    imgs=[]
+    labs=[]
+    img_num = np.zeros([len(path)])
+    def readData(paths):
+        i=-1
+        for path in paths[4:4+classes]:
+            i=i+1
+            j=0
+            
+            for filename in os.listdir(path):
+                
+                if (filename.endswith('.jpg') and j<=40):
+                    filename = path + '/' + filename
+                    #print(filename)
+                    #pdb.set_trace()
+                    #尺寸修改，改变为
+                    imgs.append(filename)
+                    labs.append(path)
+                    j=j+1
+            img_num[i] = j
+    
+    #数据录入处理
+    readData(path)
+    data_dummy=pd.get_dummies(labs)
+    labs = np.array(data_dummy)
+    return imgs,labs
+
+
+def run_benchmark():
+  """Run the benchmark on AlexNet."""
+  train_data_dir = "/data//101_ObjectCategories"
+  imgs,labs = images_get(train_data_dir)
+  imgs, x_test, labs,y_test = train_test_split(imgs,labs, test_size=0.25,shuffle=True)
+  i=0
+  with tf.Graph().as_default():
+        # Generate some dummy images.
+    image_size = 224
+        # Note that our padding definition is slightly different the cuda-convnet.
+        # In order to force the model to start with the same activations sizes,
+        # we add 3 to the image_size and employ VALID padding above.
+        #输入图像
+    i=i+1
+    
+    #pdb.set_trace()
+    weights = {
+    'wc1':tf.Variable(tf.truncated_normal([11, 11, 3, 96],
+                                          dtype=tf.float32,stddev=1e-1), name='weights'),
+    'wc2':tf.Variable(tf.truncated_normal([5, 5, 96, 256],
+                                          dtype=tf.float32,stddev=1e-1), name='weights'),
+    'wc3':tf.Variable(tf.truncated_normal([3, 3, 256, 384],
+                                          dtype=tf.float32,stddev=1e-1), name='weights'),
+    'wc4':tf.Variable(tf.truncated_normal([3, 3, 384, 256],
+                                             dtype=tf.float32,stddev=1e-1), name='weights'),
+    'wc5':tf.Variable(tf.truncated_normal([3, 3, 256, 256],
+                                             dtype=tf.float32,stddev=1e-1), name='weights'),
+    'fc6':tf.Variable(tf.truncated_normal([6, 6, 256, 4096],
+                                             dtype=tf.float32,stddev=1e-1), name='weights'),
+    'fc7':tf.Variable(tf.truncated_normal([1, 1, 4096, 4096],
+                                             dtype=tf.float32,stddev=1e-1), name='weights'),
+    'fc8':tf.Variable(tf.truncated_normal([1, 1, 4096, classes],
+                                             dtype=tf.float32,stddev=1e-1), name='weights')
+      }
+    biases = {
+    'wc1':tf.Variable(tf.constant(0.0, shape=[96], dtype=tf.float32),
+                     trainable=True, name='biases'),
+    'wc2':tf.Variable(tf.constant(0.0, shape=[256], dtype=tf.float32),
+                         trainable=True, name='biases'),
+    'wc3':tf.Variable(tf.constant(0.0, shape=[384], dtype=tf.float32),
+                         trainable=True, name='biases'),
+    'wc4':tf.Variable(tf.constant(0.0, shape=[256], dtype=tf.float32),
+                         trainable=True, name='biases'),
+    'wc5':tf.Variable(tf.constant(0.0, shape=[256], dtype=tf.float32),
+                         trainable=True, name='biases'),
+    'fc6':tf.Variable(tf.constant(0.0, shape=[4096], dtype=tf.float32),
+                         trainable=True, name='biases'),
+    'fc7':tf.Variable(tf.constant(0.0, shape=[4096], dtype=tf.float32),
+                         trainable=True, name='biases'),
+    'fc8':tf.Variable(tf.constant(0.0, shape=[classes], dtype=tf.float32),
+                         trainable=True, name='biases')
+      }
+    learning_rate = 0.001
+    y = tf.placeholder("float",shape=[None,classes],name='y_true')
+    x,y_pred = inference(weights,biases)
+    #cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits( logits = y_pred,labels=y))
+    #cost = -tf.reduce_mean(y*tf.log(y_pred))
+    cost = tf.reduce_mean(tf.square(y_pred-y))
+    optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(cost)
+    # Build a Graph that computes the logits predictions from the
+    # inference model.
+    init = tf.global_variables_initializer()
+    sess = tf.Session()
+    #init = tf.global_variables_initializer()
+    # Start running operations on the Graph.
+    #config = tf.ConfigProto()
+    #config.gpu_options.allocator_type = 'BFC'
+    #sess = tf.Session(config)
+    sess.run(init)
+    batch = 50
+    display_step = 5
+    itr_num = int(len(imgs) / batch)
+    step = 10
+    dropout = 0.75
+    #定义一个for循环
+    bench_num =5
+    for bench in range(bench_num):
+    
+      for itr in range(itr_num):
+          
+          '''
+          images = tf.Variable(tf.random_normal([FLAGS.batch_size,
+                                                image_size,
+                                                image_size, 3],
+                                              dtype=tf.float32,
+                                             stddev=1e-1))'''
+          #数据读取
+          
+          x_batch = img_resize(imgs[batch*itr:batch*(itr+1)])
+          
+          y_batch = labs[batch*itr:batch*(itr+1),:]
+
+          
+          #print(y_batch[0,:])
+          sess.run(optimizer,feed_dict={x:x_batch,y:y_batch})
+          
+          y1 = sess.run(y_pred,feed_dict={x:x_batch,y:y_batch})
+          correct_pred = tf.equal(np.argmax(y1,1),np.argmax(y_batch,1))
+          accuracy = tf.reduce_mean(tf.cast(correct_pred,"float"))
+          
+          print(y_batch[0])
+          print(y1[0])
+          print(np.argmax(y_batch,1))
+          print(np.argmax(y1,1))
+          if step % display_step == 0:
+            
+            loss,acc = sess.run([cost,accuracy],feed_dict={x:x_batch,y:y_batch})
+            print("Iter" + str(itr/itr_num) + ",训练集损失值"+"{:.6f}".format(loss)+"训练集正确率,"+"{:.5f}".format(acc))
+          
+      #pdb.set_trace()
+    #在测试集上正确率
+    x_batch = img_resize(x_test)
+          
+    y_batch = y_test
+    
+    y1 = sess.run(y_pred,feed_dict={x:x_batch})
+    correct_pred = tf.equal(np.argmax(y1,1),np.argmax(y_batch,1))
+    accuracy = tf.reduce_mean(tf.cast(correct_pred,"float"))
+    
+    print(y_batch[0])
+    print(y1[0])
+    print(np.argmax(y_batch,1))
+    print(np.argmax(y1,1))
+    
+      
+    loss,acc = sess.run([cost,accuracy],feed_dict={x:x_batch,y:y_batch})
+    print("Iter" + str(itr/itr_num) + "测试集损失值,"+"{:.6f}".format(loss)+"训练集正确率,"+"{:.5f}".format(acc))
+
+
+run_benchmark()
